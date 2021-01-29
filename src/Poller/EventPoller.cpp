@@ -1,7 +1,7 @@
 ﻿/*
  * Copyright (c) 2016 The ZLToolKit project authors. All Rights Reserved.
  *
- * This file is part of ZLToolKit(https://github.com/xiongziliang/ZLToolKit).
+ * This file is part of ZLToolKit(https://github.com/xia-chu/ZLToolKit).
  *
  * Use of this source code is governed by MIT license that can be found in the
  * LICENSE file in the root of the source tree. All contributing project authors
@@ -234,7 +234,7 @@ inline void EventPoller::onPipeEvent() {
     _list_swap.for_each([&](const Task::Ptr &task) {
         try {
             (*task)();
-        } catch (ExitException &ex) {
+        } catch (ExitException &) {
             _exit_flag = true;
         } catch (std::exception &ex) {
             ErrorL << "EventPoller执行异步任务捕获到异常:" << ex.what();
@@ -251,11 +251,11 @@ static map<thread::id, weak_ptr<EventPoller> > s_all_poller;
 
 BufferRaw::Ptr EventPoller::getSharedBuffer() {
     auto ret = _shared_buffer.lock();
-    if (ret) {
-        return ret;
+    if (!ret) {
+        //预留一个字节存放\0结尾符
+        ret = std::make_shared<BufferRaw>(1 + SOCKET_DEFAULT_BUF_SIZE);
+        _shared_buffer = ret;
     }
-    ret = std::make_shared<BufferRaw>(64 * 1024);
-    _shared_buffer = ret;
     return ret;
 }
 
@@ -316,7 +316,7 @@ void EventPoller::runLoop(bool blocked,bool regist_self) {
         while (!_exit_flag) {
             //定时器事件中可能操作_event_map
             minDelay = getMinDelay();
-            tv.tv_sec = minDelay / 1000;
+            tv.tv_sec = (decltype(tv.tv_sec))(minDelay / 1000);
             tv.tv_usec = 1000 * (minDelay % 1000);
 
             set_read.fdZero();

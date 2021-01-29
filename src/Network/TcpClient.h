@@ -1,7 +1,7 @@
 ﻿/*
  * Copyright (c) 2016 The ZLToolKit project authors. All Rights Reserved.
  *
- * This file is part of ZLToolKit(https://github.com/xiongziliang/ZLToolKit).
+ * This file is part of ZLToolKit(https://github.com/xia-chu/ZLToolKit).
  *
  * Use of this source code is governed by MIT license that can be found in the
  * LICENSE file in the root of the source tree. All contributing project authors
@@ -88,6 +88,8 @@ private:
 private:
     string _net_adapter = "0.0.0.0";
     std::shared_ptr<Timer> _timer;
+    //对象个数统计
+    ObjectStatistic<TcpClient> _statistic;
 };
 
 //用于实现TLS客户端的模板对象
@@ -113,7 +115,7 @@ public:
         }
     }
 
-    int send(Buffer::Ptr buf) override {
+    ssize_t send(Buffer::Ptr buf) override {
         if (_ssl_box) {
             auto size = buf->size();
             _ssl_box->onSend(buf);

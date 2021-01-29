@@ -1,7 +1,7 @@
 ﻿/*
  * Copyright (c) 2016 The ZLToolKit project authors. All Rights Reserved.
  *
- * This file is part of ZLToolKit(https://github.com/xiongziliang/ZLToolKit).
+ * This file is part of ZLToolKit(https://github.com/xia-chu/ZLToolKit).
  *
  * Use of this source code is governed by MIT license that can be found in the
  * LICENSE file in the root of the source tree. All contributing project authors
@@ -67,6 +67,10 @@ public:
      * @param ex 触发onError事件的原因
      */
     void safeShutdown(const SockException &ex = SockException(Err_shutdown, "self shutdown"));
+
+private:
+    //对象个数统计
+    ObjectStatistic<TcpSession> _statistic;
 };
 
 //通过该模板可以让TCP服务器快速支持TLS
@@ -101,7 +105,7 @@ public:
     }
 
 protected:
-    int send(Buffer::Ptr buf) override {
+    ssize_t send(Buffer::Ptr buf) override {
         auto size = buf->size();
         _ssl_box.onSend(buf);
         return size;

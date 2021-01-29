@@ -1,7 +1,7 @@
 ﻿/*
  * Copyright (c) 2016 The ZLToolKit project authors. All Rights Reserved.
  *
- * This file is part of ZLToolKit(https://github.com/xiongziliang/ZLToolKit).
+ * This file is part of ZLToolKit(https://github.com/xia-chu/ZLToolKit).
  *
  * Use of this source code is governed by MIT license that can be found in the
  * LICENSE file in the root of the source tree. All contributing project authors
@@ -115,7 +115,7 @@ public:
         if(totalTime == 0){
             return 0;
         }
-        return totalRunTime * 100 / totalTime;
+        return (int)(totalRunTime * 100 / totalTime);
     }
 
 private:
@@ -312,7 +312,7 @@ public:
         TaskExecutor::Ptr executor_min_load = _threads[thread_pos];
         auto min_load = executor_min_load->load();
 
-        for(int i = 0; i < _threads.size() ; ++i , ++thread_pos ){
+        for(size_t i = 0; i < _threads.size() ; ++i , ++thread_pos ){
             if(thread_pos >= _threads.size()){
                 thread_pos = 0;
             }
@@ -351,17 +351,16 @@ public:
      * @return
      */
     void getExecutorDelay(const function<void(const vector<int> &)> &callback){
-        int totalCount = _threads.size();
-        std::shared_ptr<atomic_int> completed = std::make_shared<atomic_int>(0);
-        std::shared_ptr<vector<int> > delayVec = std::make_shared<vector<int>>(totalCount);
+        std::shared_ptr<vector<int> > delay_vec = std::make_shared<vector<int>>(_threads.size());
+        shared_ptr<void> finished(nullptr, [callback, delay_vec](void *) {
+            //此析构回调触发时，说明已执行完毕所有async任务
+            callback((*delay_vec));
+        });
         int index = 0;
-        for (auto &th : _threads){
-            std::shared_ptr<Ticker> ticker = std::make_shared<Ticker >();
-            th->async([completed,totalCount,delayVec,index,ticker,callback](){
-                (*delayVec)[index] = ticker->elapsedTime();
-                if(++(*completed) == totalCount){
-                    callback((*delayVec));
-                }
+        for (auto &th : _threads) {
+            std::shared_ptr<Ticker> delay_ticker = std::make_shared<Ticker>();
+            th->async([finished, delay_vec, index, delay_ticker]() {
+                (*delay_vec)[index] = (int) delay_ticker->elapsedTime();
             }, false);
             ++index;
         }
@@ -387,8 +386,8 @@ protected:
         }
     }
 protected:
+    size_t _thread_pos = 0;
     vector <TaskExecutor::Ptr > _threads;
-    int _thread_pos = 0;
 };
 
 }//toolkit
