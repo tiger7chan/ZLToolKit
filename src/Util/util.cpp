@@ -118,6 +118,17 @@ string hexdump(const void *buf, size_t len) {
     return ret;
 }
 
+string hexmem(const void* buf, size_t len) {
+	string ret;
+	char tmp[8];
+	const uint8_t* data = (const uint8_t*)buf;
+	for (size_t i = 0; i < len; ++i) {
+		int sz = sprintf(tmp, "%.2x ", data[i]);
+		ret.append(tmp, sz);
+	}
+	return ret;
+}
+
 string exePath() {
     char buffer[PATH_MAX * 2 + 1] = { 0 };
     int n = -1;
@@ -347,12 +358,8 @@ static inline bool initMillisecondThread() {
             } else if(expired != 0){
                 WarnL << "Stamp expired is not abnormal:" << expired;
             }
-#if !defined(_WIN32)
             //休眠0.5 ms
             usleep(500);
-#else
-            Sleep(1);
-#endif
         }
     });
     static onceToken s_token([]() {
@@ -377,22 +384,26 @@ uint64_t getCurrentMicrosecond(bool system_time) {
     return s_currentMicrosecond.load(memory_order_acquire);
 }
 
-string getTimeStr(const char *fmt,time_t time){
-    std::tm tm_snapshot;
-    if(!time){
+string getTimeStr(const char *fmt, time_t time) {
+    if (!time) {
         time = ::time(NULL);
     }
-#if defined(_WIN32)
-    localtime_s(&tm_snapshot, &time); // thread-safe
-#else
-    localtime_r(&time, &tm_snapshot); // POSIX
-#endif
-    char buffer[1024];
-    auto success = std::strftime(buffer, sizeof(buffer), fmt, &tm_snapshot);
-    if (0 == success)
-        return string(fmt);
-    return buffer;
+    auto tm = getLocalTime(time);
+    char buffer[64];
+    auto success = std::strftime(buffer, sizeof(buffer), fmt, &tm);
+    return 0 == success ? string(fmt) : buffer;
 }
+
+struct tm getLocalTime(time_t sec) {
+    struct tm tm;
+#ifdef _WIN32
+    localtime_s(&tm, &sec);
+#else
+    localtime_r(&sec, &tm);
+#endif //_WIN32
+    return tm;
+}
+
 
 }  // namespace toolkit
 

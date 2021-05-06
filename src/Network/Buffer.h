@@ -11,6 +11,7 @@
 #ifndef ZLTOOLKIT_BUFFER_H
 #define ZLTOOLKIT_BUFFER_H
 
+#include <assert.h>
 #include <memory>
 #include <string>
 #include <deque>
@@ -18,12 +19,19 @@
 #include <vector>
 #include <atomic>
 #include <sstream>
+#include <type_traits>
 #include <functional>
 #include "Util/util.h"
-#include "Util/uv_errno.h"
 #include "Util/List.h"
+#include "Util/uv_errno.h"
+#include "Util/ResourcePool.h"
 #include "Network/sockutil.h"
 using namespace std;
+
+namespace std {
+    template <typename T> struct is_pointer<shared_ptr<T> > : std::true_type {};
+    template <typename T> struct is_pointer<shared_ptr<T const> > : std::true_type {};
+}
 
 namespace toolkit {
 //缓存基类
@@ -61,7 +69,7 @@ public:
     ~BufferOffset() {}
 
     char *data() const override {
-        return const_cast<char *>(_data.data()) + _offset;
+        return const_cast<char *>(getPointer<C>(_data)->data()) + _offset;
     }
 
     size_t size() const override{
@@ -73,12 +81,26 @@ public:
     }
 
 private:
-    void setup(size_t offset = 0,size_t len = 0){
-        _offset = offset;
-        _size = len;
-        if(_size <= 0 || _size > _data.size()){
-            _size = _data.size();
+    void setup(size_t offset = 0, size_t size = 0) {
+        auto max_size = getPointer<C>(_data)->size();
+        assert(offset + size <= max_size);
+        if (!size) {
+            size = max_size - offset;
         }
+        _size = size;
+        _offset = offset;
+    }
+
+    template<typename T>
+    static typename std::enable_if<std::is_pointer<T>::value, const T &>::type
+    getPointer(const T &data) {
+        return data;
+    }
+
+    template<typename T>
+    static typename std::enable_if<!std::is_pointer<T>::value, const T *>::type
+    getPointer(const T &data) {
+        return &data;
     }
 
 private:
@@ -92,18 +114,11 @@ typedef BufferOffset<string> BufferString;
 //指针式缓存对象，
 class BufferRaw : public Buffer{
 public:
-    typedef std::shared_ptr<BufferRaw> Ptr;
-    BufferRaw(size_t capacity = 0) {
-        if(capacity){
-            setCapacity(capacity);
-        }
-    }
+    using Ptr = std::shared_ptr<BufferRaw>;
 
-    BufferRaw(const char *data,size_t size = 0){
-        assign(data,size);
-    }
+    static Ptr create();
 
-    ~BufferRaw() {
+    ~BufferRaw() override{
         if(_data){
             delete [] _data;
         }
@@ -162,6 +177,20 @@ public:
     size_t getCapacity() const override{
         return _capacity;
     }
+
+protected:
+    friend class ResourcePool_l<BufferRaw>;
+
+    BufferRaw(size_t capacity = 0) {
+        if(capacity){
+            setCapacity(capacity);
+        }
+    }
+
+    BufferRaw(const char *data,size_t size = 0){
+        assign(data,size);
+    }
+
 
 private:
     size_t _size = 0;
