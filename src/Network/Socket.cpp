@@ -25,6 +25,29 @@ namespace toolkit {
 
 StatisticImp(Socket);
 
+static SockException toSockException(int error) {
+    switch (error) {
+        case 0:
+        case UV_EAGAIN: return SockException(Err_success, "success");
+        case UV_ECONNREFUSED: return SockException(Err_refused, uv_strerror(error), error);
+        case UV_ETIMEDOUT: return SockException(Err_timeout, uv_strerror(error), error);
+        default: return SockException(Err_other, uv_strerror(error), error);
+    }
+}
+
+static SockException getSockErr(const SockFD::Ptr &sock, bool try_errno = true) {
+    int error = 0, len = sizeof(int);
+    getsockopt(sock->rawFd(), SOL_SOCKET, SO_ERROR, (char *) &error, (socklen_t *) &len);
+    if (error == 0) {
+        if (try_errno) {
+            error = get_uv_error(true);
+        }
+    } else {
+        error = uv_translate_posix_error(error);
+    }
+    return toSockException(error);
+}
+
 Socket::Ptr Socket::createSocket(const EventPoller::Ptr &poller, bool enable_mutex){
     return Socket::Ptr(new Socket(poller, enable_mutex));
 }
@@ -181,26 +204,6 @@ void Socket::connect(const string &url, uint16_t port, onErrCB con_cb_in, float 
     _async_con_cb = async_con_cb;
 }
 
-static SockException getSockErr(const SockFD::Ptr &sock, bool try_errno = true) {
-    int error = 0, len = sizeof(int);
-    getsockopt(sock->rawFd(), SOL_SOCKET, SO_ERROR, (char *) &error, (socklen_t *) &len);
-    if (error == 0) {
-        if (try_errno) {
-            error = get_uv_error(true);
-        }
-    } else {
-        error = uv_translate_posix_error(error);
-    }
-
-    switch (error) {
-        case 0:
-        case UV_EAGAIN: return SockException(Err_success, "success");
-        case UV_ECONNREFUSED: return SockException(Err_refused, uv_strerror(error), error);
-        case UV_ETIMEDOUT: return SockException(Err_timeout, uv_strerror(error), error);
-        default: return SockException(Err_other, uv_strerror(error), error);
-    }
-}
-
 void Socket::onConnected(const SockFD::Ptr &sock, const onErrCB &cb) {
     auto err = getSockErr(sock, false);
     if (err) {
@@ -241,7 +244,7 @@ bool Socket::attachEvent(const SockFD::Ptr &sock, bool is_udp) {
             strong_self->onWriteAble(strong_sock);
         }
         if (event & Event_Error) {
-            strong_self->onError(strong_sock);
+            strong_self->emitErr(getSockErr(strong_sock));
         }
     });
 
@@ -272,8 +275,9 @@ ssize_t Socket::onRead(const SockFD::Ptr &sock, bool is_udp) noexcept{
         }
 
         if (nread == -1) {
-            if (get_uv_error(true) != UV_EAGAIN) {
-                onError(sock);
+            auto err = get_uv_error(true);
+            if (err != UV_EAGAIN) {
+                emitErr(toSockException(err));
             }
             return ret;
         }
@@ -293,10 +297,6 @@ ssize_t Socket::onRead(const SockFD::Ptr &sock, bool is_udp) noexcept{
         }
     }
     return 0;
-}
-
-void Socket::onError(const SockFD::Ptr &sock) {
-    emitErr(getSockErr(sock));
 }
 
 bool Socket::emitErr(const SockException& err) noexcept{
@@ -343,7 +343,11 @@ ssize_t Socket::send(string buf, struct sockaddr *addr, socklen_t addr_len, bool
     return send(std::make_shared<BufferString>(std::move(buf)), addr, addr_len, try_flush);
 }
 
-ssize_t Socket::send(Buffer::Ptr buf, struct sockaddr *addr, socklen_t addr_len, bool try_flush){
+ssize_t Socket::send(Buffer::Ptr buf, struct sockaddr *addr, socklen_t addr_len, bool try_flush) {
+    return send(std::make_shared<BufferSock>(std::move(buf), addr, addr_len), try_flush);
+}
+
+ssize_t Socket::send(BufferSock::Ptr buf, bool try_flush) {
     auto size = buf ? buf->size() : 0;
     if (!size) {
         return 0;
@@ -362,7 +366,7 @@ ssize_t Socket::send(Buffer::Ptr buf, struct sockaddr *addr, socklen_t addr_len,
 
     {
         LOCK_GUARD(_mtx_send_buf_waiting);
-        _send_buf_waiting.emplace_back(sock->type() == SockNum::Sock_UDP ? std::make_shared<BufferSock>(std::move(buf), addr, addr_len) : buf);
+        _send_buf_waiting.emplace_back(std::move(buf));
     }
 
     if(try_flush){
@@ -374,7 +378,7 @@ ssize_t Socket::send(Buffer::Ptr buf, struct sockaddr *addr, socklen_t addr_len,
         //该socket不可写,判断发送超时
         if (_send_flush_ticker.elapsedTime() > _max_send_buffer_ms) {
             //如果发送列队中最老的数据距今超过超时时间限制，那么就断开socket连接
-            emitErr(SockException(Err_other, "Socket send timeout"));
+            emitErr(SockException(Err_other, "socket send timeout"));
             return -1;
         }
     }
@@ -481,8 +485,9 @@ int Socket::onAccept(const SockFD::Ptr &sock, int event) noexcept {
                     //没有新连接
                     return 0;
                 }
-                ErrorL << "tcp服务器监听异常:" << uv_strerror(err);
-                onError(sock);
+                auto ex = toSockException(err);
+                emitErr(ex);
+                ErrorL << "tcp服务器监听异常:" << ex.what();
                 return -1;
             }
 
@@ -536,8 +541,9 @@ int Socket::onAccept(const SockFD::Ptr &sock, int event) noexcept {
         }
 
         if (event & Event_Error) {
-            ErrorL << "tcp服务器监听异常:" << get_uv_errmsg();
-            onError(sock);
+            auto ex = getSockErr(sock);
+            emitErr(ex);
+            ErrorL << "tcp服务器监听异常:" << ex.what();
             return -1;
         }
     }
@@ -652,7 +658,7 @@ bool Socket::flushData(const SockFD::Ptr &sock, bool poller_thread) {
             break;
         }
         //其他错误代码，发生异常
-        onError(sock);
+        emitErr(toSockException(err));
         return false;
     }
 
@@ -755,7 +761,7 @@ bool Socket::cloneFromListenSocket(const Socket &other){
     return listen(sock);
 }
 
-bool Socket::setSendPeerAddr(const struct sockaddr *dst_addr, socklen_t addr_len) {
+bool Socket::bindPeerAddr(const struct sockaddr *dst_addr, socklen_t addr_len) {
     LOCK_GUARD(_mtx_sock_fd);
     if (!_sock_fd) {
         return false;
